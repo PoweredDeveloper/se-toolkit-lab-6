@@ -12,6 +12,11 @@ from typing import Any, Dict, List, Tuple
 import httpx
 
 
+def _print_json_and_exit(data: Dict[str, Any], exit_code: int) -> None:
+    print(json.dumps(data, ensure_ascii=False), file=sys.stdout)
+    raise SystemExit(exit_code)
+
+
 def _load_llm_env(env_file: str = ".env.agent.secret") -> None:
     """Load LLM_* variables from a simple key=value env file into os.environ.
 
@@ -124,7 +129,11 @@ def _call_llm(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Di
             "Set them in .env.agent.secret or the environment.",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return {
+            "error": "Missing LLM configuration",
+            "missing": missing,
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+        }
 
     url = f"{api_base}/chat/completions"
     headers = {
@@ -144,14 +153,11 @@ def _call_llm(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Di
     except httpx.RequestError as exc:
         error_msg = f"LLM request error: {exc}"
         print(error_msg, file=sys.stderr)
-        print(
-            json.dumps(
-                {"answer": "", "source": "", "tool_calls": [], "error": "LLM request failed"},
-                ensure_ascii=False,
-            ),
-            file=sys.stdout,
-        )
-        sys.exit(1)
+        return {
+            "error": "LLM request failed",
+            "detail": str(exc),
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+        }
 
     if response.status_code < 200 or response.status_code >= 300:
         short_body = response.text[:200]
@@ -159,19 +165,11 @@ def _call_llm(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Di
             f"LLM returned non-2xx status {response.status_code}: {short_body}",
             file=sys.stderr,
         )
-        print(
-            json.dumps(
-                {
-                    "answer": "",
-                    "source": "",
-                    "tool_calls": [],
-                    "error": f"LLM HTTP {response.status_code}",
-                },
-                ensure_ascii=False,
-            ),
-            file=sys.stdout,
-        )
-        sys.exit(1)
+        return {
+            "error": f"LLM HTTP {response.status_code}",
+            "body": short_body,
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+        }
 
     try:
         return response.json()
@@ -181,14 +179,11 @@ def _call_llm(messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Di
             f"Failed to parse LLM JSON response: {body_preview}",
             file=sys.stderr,
         )
-        print(
-            json.dumps(
-                {"answer": "", "source": "", "tool_calls": [], "error": "Invalid LLM JSON"},
-                ensure_ascii=False,
-            ),
-            file=sys.stdout,
-        )
-        sys.exit(1)
+        return {
+            "error": "Invalid LLM JSON",
+            "body": body_preview,
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+        }
 
 
 def _project_root() -> Path:
@@ -412,8 +407,18 @@ def main() -> None:
         sys.exit(1)
 
     question = sys.argv[1]
-    result = _run_agent(question)
-    print(json.dumps(result, ensure_ascii=False))
+    try:
+        result = _run_agent(question)
+        print(json.dumps(result, ensure_ascii=False))
+    except SystemExit:
+        raise
+    except Exception as exc:
+        # Last-resort safety: never crash without producing JSON.
+        print(f"Unhandled agent error: {exc}", file=sys.stderr)
+        _print_json_and_exit(
+            {"answer": "", "source": "", "tool_calls": [], "error": "Unhandled agent error"},
+            exit_code=0,
+        )
 
 
 if __name__ == "__main__":
