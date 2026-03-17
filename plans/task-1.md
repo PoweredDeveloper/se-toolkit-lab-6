@@ -6,7 +6,9 @@
 - **Model**: `qwen3-coder-plus` (OpenAI-compatible chat completions).
 - **Endpoint**: `LLM_API_BASE` read from `.env.agent.secret`, e.g. `http://<vm-ip>:42005/v1`.
 - **Auth**: `LLM_API_KEY` read from `.env.agent.secret` (value `gochamp` set outside the code).
-- **Config loading**: Use `python-dotenv` (or `dotenv` support in `uv`) so `agent.py` reads from `.env.agent.secret` via environment variables, not hardcoded values.
+- **Config loading**: Manually parse `.env.agent.secret` in `agent.py` as a simple `KEY=VALUE`
+  file and populate missing `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` in `os.environ`
+  without overwriting existing environment variables.
 
 ## CLI behavior
 
@@ -24,13 +26,13 @@
 
 - **System prompt**:
   - Short, minimal instructions: answer the question concisely, tools disabled, respond in plain text.
-- **HTTP request** (using `requests`):
+- **HTTP request** (using `httpx`):
   - POST to `${LLM_API_BASE}/chat/completions`.
   - Headers: `Authorization: Bearer ${LLM_API_KEY}`, `Content-Type: application/json`.
   - Body:
     - `model`: `${LLM_MODEL}` from env.
     - `messages`: one system message + one user message (the CLI question).
-    - Optional: `timeout` around 30–40 seconds at `requests` level to stay under 60s overall.
+  - Use a client-level timeout around 40 seconds to stay under 60s overall.
 - **Response handling**:
   - Parse JSON.
   - Extract `answer` from `choices[0].message.content` (fall back to a sane message if empty).
