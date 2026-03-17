@@ -2,11 +2,11 @@
 
 This project includes a simple CLI agent implemented in `agent.py`.  
 The agent takes a question as a command-line argument, sends it to an LLM that
-supports the OpenAI-compatible Chat Completions API, and prints a structured
-JSON response to `stdout`.
+supports the OpenAI-compatible Chat Completions API **with tool/function calling**,
+and prints a structured JSON response to `stdout`.
 
-The agent is intentionally minimal in Task&nbsp;1: no tools, no multi-turn
-conversation, and no domain-specific logic. Those will be added in later tasks.
+In Task&nbsp;2, the agent becomes a **documentation agent**: it can call tools to
+inspect the repository wiki (`wiki/`) and cite the source section used.
 
 ## LLM Provider and Model
 
@@ -51,13 +51,13 @@ uv run agent.py "What does REST stand for?"
 - **Output**: One line of JSON printed to `stdout`:
 
 ```json
-{"answer": "Representational State Transfer.", "tool_calls": []}
+{"answer": "Representational State Transfer.", "source": "wiki/rest-api.md#rest", "tool_calls": []}
 ```
 
 Rules:
 
-- `answer` (string) and `tool_calls` (array) are always present.
-- For Task&nbsp;1, `tool_calls` is always an empty list.
+- `answer` (string), `source` (string), and `tool_calls` (array) are always present.
+- `tool_calls` is populated when the agent used tools during the run.
 - Only the JSON line is written to `stdout`; all diagnostics go to `stderr`.
 - On success, the process exits with code `0`.
 
@@ -69,17 +69,39 @@ If the question argument is missing, the agent prints a usage message to
 1. Parse the CLI argument into a question string.
 2. Load `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` from the environment
    (optionally via `.env.agent.secret`).
-3. Build a minimal system prompt:
-   - Answer concisely.
-   - Use plain text.
-   - Tools are disabled.
-4. Send a `POST` request to `${LLM_API_BASE}/chat/completions` with:
+3. Build a system prompt strategy:
+   - Use `list_files` to discover relevant wiki files.
+   - Use `read_file` to read markdown content.
+   - Provide a final answer **and** a `source` reference (`wiki/<file>.md#<anchor>`).
+   - Return the final response as a JSON object in the assistant message content.
+4. Send a `POST` request to `${LLM_API_BASE}/chat/completions` with tool schemas:
    - `model`: value from `LLM_MODEL`.
-   - `messages`: one system message and one user message.
-5. Parse the JSON response and extract:
-   - `choices[0].message.content` as the answer text.
+   - `messages`: system + user + (tool results as needed).
+   - `tools`: definitions for `list_files` and `read_file`.
+5. Enter an agentic loop (max **10 tool calls** total):
+   - If the model returns `tool_calls`, execute them and send results back as `tool` messages.
+   - If the model returns final text (no `tool_calls`), parse it as JSON and extract `answer` and `source`.
 6. Print the final JSON object:
-   - `{"answer": <string>, "tool_calls": []}`.
+   - `{"answer": <string>, "source": <string>, "tool_calls": [...]}`.
+
+## Tools
+
+The agent exposes two tools to the LLM:
+
+- **`list_files`**
+  - **Args**: `{"path": "<relative-dir>"}` (example: `{"path":"wiki"}`)
+  - **Result**: newline-separated directory entries (or an error string)
+- **`read_file`**
+  - **Args**: `{"path": "<relative-file>"}` (example: `{"path":"wiki/git.md"}`)
+  - **Result**: UTF-8 file contents (or an error string)
+
+### Tool security
+
+Both tools reject:
+
+- Absolute paths
+- Any path containing `..`
+- Any resolved path outside the project root directory
 
 ### Error Handling
 
@@ -91,7 +113,7 @@ If the question argument is missing, the agent prints a usage message to
   - A structured JSON error is printed to `stdout`:
 
     ```json
-    {"answer": "", "tool_calls": [], "error": "<short description>"}
+    {"answer": "", "source": "", "tool_calls": [], "error": "<short description>"}
     ```
 
   - The process exits with a non-zero status code.
@@ -105,8 +127,13 @@ A regression test is defined in `backend/tests/unit/test_agent_cli.py`. It:
 - Parses `stdout` as JSON.
 - Verifies that:
   - `answer` exists and is a string.
+  - `source` exists and is a string.
   - `tool_calls` exists and is a list.
 
 This guards the basic contract expected by the lab evaluation runner and future
 tasks that build on this agent.
+
+Additional Task&nbsp;2 regression tests run `agent.py` against a local stub LLM
+server to verify the tool-calling loop populates `tool_calls` and produces a
+wiki `source` reference.
 
