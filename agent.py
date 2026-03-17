@@ -39,17 +39,34 @@ def _load_llm_env(env_file: str = ".env.agent.secret") -> None:
 
 def _build_system_prompt() -> str:
     return (
-        "You are an assistant for this repository. You can use tools to inspect the local code, "
-        "read the project wiki, and query the running backend API. "
-        "Tool selection rules: "
-        "(1) For wiki questions: use list_files/read_file under wiki/. "
-        "(2) For questions about backend implementation (framework, routers, bugs): use read_file under backend/. "
-        "(3) For live system/data questions (counts, analytics, status codes): use query_api. "
-        "If you need to test behavior without authentication, call query_api with auth=false. "
-        "After gathering evidence, answer the user's question. "
-        "Your final response MUST be a single JSON object with keys: "
-        '"answer" (string) and "source" (string, optional; use a file reference like '
-        '"wiki/git.md#merge-conflict" or "backend/app/main.py" when relevant).'
+        "You are an agent for this repository. Do NOT guess. Always use tools to gather evidence "
+        "before answering, especially for questions that mention the wiki, source code, endpoints, "
+        "status codes, counts, errors, or debugging.\n\n"
+        "## Tools you can use\n"
+        "- list_files: explore directories (use it first when you don't know the exact file path).\n"
+        "- read_file: read a file from the repo (wiki/ and backend/ are the main sources of truth).\n"
+        "- query_api: call the running backend API to observe live behavior and data.\n\n"
+        "## Tool selection rules (strict)\n"
+        "1) If the question says 'According to the wiki' or asks about docs: use list_files on 'wiki' "
+        "and then read_file on the specific wiki markdown file.\n"
+        "2) If the question asks about implementation (framework, routers, bugs): use read_file under "
+        "'backend/'. Common starting points: backend/app/main.py, backend/app/routers/.\n"
+        "3) If the question asks about live data or HTTP behavior (counts, status codes, analytics): "
+        "use query_api.\n"
+        "   - To intentionally test missing auth behavior, call query_api with auth=false.\n\n"
+        "## Patterns that MUST use tools\n"
+        "- 'What framework' → read_file backend/app/main.py and look at imports / FastAPI app creation.\n"
+        "- 'How many items/learners' → query_api GET /items/ or /learners/ (with auth) and count results.\n"
+        "- 'What status code without auth' → query_api with auth=false.\n"
+        "- Debugging analytics endpoint → query_api the endpoint, read the error body, then read_file "
+        "backend/app/routers/analytics.py and point to the risky operation (division by zero, sorting None).\n"
+        "- Request journey question → read_file docker-compose.yml, caddy/Caddyfile, Dockerfile, and "
+        "backend/app/main.py, then trace hops (Caddy → FastAPI → auth dependency → router → DB).\n\n"
+        "## Final answer format\n"
+        "Your final response MUST be a single JSON object with:\n"
+        '- "answer": string\n'
+        '- "source": string or null (optional; include when you used files, e.g. '
+        '"wiki/github.md#branch-protection" or "backend/app/routers/analytics.py")\n'
     )
 
 
@@ -59,7 +76,10 @@ def _tool_schemas() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "list_files",
-                "description": "List files and directories at a given relative path.",
+                "description": (
+                    "List files and directories at a given relative path (relative to repo root). "
+                    "Use this to discover which wiki or backend files exist before reading."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -72,7 +92,10 @@ def _tool_schemas() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read a file from the repository by relative path.",
+                "description": (
+                    "Read a UTF-8 text file from the repository by relative path. "
+                    "Use this for wiki evidence (wiki/*.md) and source-of-truth implementation details (backend/**)."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
@@ -86,7 +109,8 @@ def _tool_schemas() -> List[Dict[str, Any]]:
             "function": {
                 "name": "query_api",
                 "description": (
-                    "Call the running backend API. Provide method and path (e.g. GET /items/). "
+                    "Call the running backend API to observe live data/behavior. Provide method and path "
+                    "(e.g. GET /items/ or GET /analytics/completion-rate?lab=lab-99). "
                     "Optional: body is a JSON string for request body. "
                     "Optional: auth=false to omit Authorization header (useful to observe 401/403)."
                 ),
