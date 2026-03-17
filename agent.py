@@ -34,14 +34,17 @@ def _load_llm_env(env_file: str = ".env.agent.secret") -> None:
 
 def _build_system_prompt() -> str:
     return (
-        "You are a documentation assistant for this repository. "
-        "You can use tools to inspect the local project wiki. "
-        "When needed, first call list_files on the wiki directory to discover files, "
-        "then call read_file to read relevant markdown. "
+        "You are an assistant for this repository. You can use tools to inspect the local code, "
+        "read the project wiki, and query the running backend API. "
+        "Tool selection rules: "
+        "(1) For wiki questions: use list_files/read_file under wiki/. "
+        "(2) For questions about backend implementation (framework, routers, bugs): use read_file under backend/. "
+        "(3) For live system/data questions (counts, analytics, status codes): use query_api. "
+        "If you need to test behavior without authentication, call query_api with auth=false. "
         "After gathering evidence, answer the user's question. "
         "Your final response MUST be a single JSON object with keys: "
-        '"answer" (string) and "source" (string, a wiki section reference like '
-        '"wiki/git.md#merge-conflict").'
+        '"answer" (string) and "source" (string, optional; use a file reference like '
+        '"wiki/git.md#merge-conflict" or "backend/app/main.py" when relevant).'
     )
 
 
@@ -69,6 +72,28 @@ def _tool_schemas() -> List[Dict[str, Any]]:
                     "type": "object",
                     "properties": {"path": {"type": "string"}},
                     "required": ["path"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "query_api",
+                "description": (
+                    "Call the running backend API. Provide method and path (e.g. GET /items/). "
+                    "Optional: body is a JSON string for request body. "
+                    "Optional: auth=false to omit Authorization header (useful to observe 401/403)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "method": {"type": "string"},
+                        "path": {"type": "string"},
+                        "body": {"type": "string"},
+                        "auth": {"type": "boolean"},
+                    },
+                    "required": ["method", "path"],
                     "additionalProperties": False,
                 },
             },
@@ -231,11 +256,71 @@ def _tool_read_file(args: Dict[str, Any]) -> str:
         return "Error: file is not valid UTF-8 text."
 
 
+def _tool_query_api(args: Dict[str, Any]) -> str:
+    method = str((args or {}).get("method", "")).upper().strip()
+    path = str((args or {}).get("path", "")).strip()
+    body_raw = (args or {}).get("body")
+    want_auth = (args or {}).get("auth")
+
+    if not method or not path:
+        return json.dumps(
+            {"status_code": 0, "body": {"error": "Missing required parameters: method, path"}},
+            ensure_ascii=False,
+        )
+
+    base_url = os.environ.get("AGENT_API_BASE_URL", "http://localhost:42002").rstrip("/")
+    url = f"{base_url}{path if path.startswith('/') else '/' + path}"
+
+    headers: Dict[str, str] = {}
+    if want_auth is not False:
+        api_key = os.environ.get("LMS_API_KEY", "")
+        if not api_key:
+            return json.dumps(
+                {"status_code": 0, "body": {"error": "Missing LMS_API_KEY for backend authentication"}},
+                ensure_ascii=False,
+            )
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    json_body: Any | None = None
+    data_body: str | None = None
+    if isinstance(body_raw, str) and body_raw.strip():
+        try:
+            json_body = json.loads(body_raw)
+        except json.JSONDecodeError:
+            # Allow non-JSON bodies, but still send content-type.
+            data_body = body_raw
+            headers.setdefault("Content-Type", "application/json")
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json_body,
+                content=data_body.encode("utf-8") if data_body is not None else None,
+            )
+    except httpx.RequestError as exc:
+        return json.dumps(
+            {"status_code": 0, "body": {"error": f"Request error: {exc}"}},
+            ensure_ascii=False,
+        )
+
+    try:
+        resp_body: Any = resp.json()
+    except ValueError:
+        resp_body = resp.text
+
+    return json.dumps({"status_code": resp.status_code, "body": resp_body}, ensure_ascii=False)
+
+
 def _execute_tool(tool_name: str, args: Dict[str, Any]) -> str:
     if tool_name == "list_files":
         return _tool_list_files(args)
     if tool_name == "read_file":
         return _tool_read_file(args)
+    if tool_name == "query_api":
+        return _tool_query_api(args)
     return f"Error: unknown tool '{tool_name}'."
 
 
@@ -247,7 +332,8 @@ def _parse_final_content(content: str) -> Tuple[str, str]:
         data = json.loads(text)
         if isinstance(data, dict):
             answer = str(data.get("answer", "")).strip()
-            source = str(data.get("source", "")).strip()
+            source_value = data.get("source", "")
+            source = str(source_value).strip() if source_value is not None else ""
             return answer, source
     except json.JSONDecodeError:
         pass

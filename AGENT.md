@@ -8,6 +8,10 @@ and prints a structured JSON response to `stdout`.
 In Task&nbsp;2, the agent becomes a **documentation agent**: it can call tools to
 inspect the repository wiki (`wiki/`) and cite the source section used.
 
+In Task&nbsp;3, the agent becomes a **system agent**: it can also query the running
+backend API to answer data-dependent questions and verify behavior (for example,
+status codes and analytics failures).
+
 ## LLM Provider and Model
 
 - **Provider**: Qwen Code API (recommended) or any OpenAI-compatible endpoint.
@@ -56,7 +60,9 @@ uv run agent.py "What does REST stand for?"
 
 Rules:
 
-- `answer` (string), `source` (string), and `tool_calls` (array) are always present.
+- `answer` (string) and `tool_calls` (array) are always present.
+- `source` (string) is optional for system/API questions; when present it should be a useful reference
+  such as `wiki/<file>.md#<anchor>` or `backend/<path>.py`.
 - `tool_calls` is populated when the agent used tools during the run.
 - Only the JSON line is written to `stdout`; all diagnostics go to `stderr`.
 - On success, the process exits with code `0`.
@@ -72,6 +78,7 @@ If the question argument is missing, the agent prints a usage message to
 3. Build a system prompt strategy:
    - Use `list_files` to discover relevant wiki files.
    - Use `read_file` to read markdown content.
+   - Use `query_api` to query the running backend for live system behavior and data.
    - Provide a final answer **and** a `source` reference (`wiki/<file>.md#<anchor>`).
    - Return the final response as a JSON object in the assistant message content.
 4. Send a `POST` request to `${LLM_API_BASE}/chat/completions` with tool schemas:
@@ -86,7 +93,7 @@ If the question argument is missing, the agent prints a usage message to
 
 ## Tools
 
-The agent exposes two tools to the LLM:
+The agent exposes three tools to the LLM:
 
 - **`list_files`**
   - **Args**: `{"path": "<relative-dir>"}` (example: `{"path":"wiki"}`)
@@ -94,6 +101,12 @@ The agent exposes two tools to the LLM:
 - **`read_file`**
   - **Args**: `{"path": "<relative-file>"}` (example: `{"path":"wiki/git.md"}`)
   - **Result**: UTF-8 file contents (or an error string)
+- **`query_api`**
+  - **Args**:
+    - `{"method": "GET", "path": "/items/"}` (typical)
+    - Optional `body` (JSON string) for POST/PUT
+    - Optional `auth: false` to omit the auth header when you want to observe unauthenticated behavior
+  - **Result**: JSON string `{"status_code": <int>, "body": <json-or-text>}`
 
 ### Tool security
 
@@ -102,6 +115,11 @@ Both tools reject:
 - Absolute paths
 - Any path containing `..`
 - Any resolved path outside the project root directory
+
+`query_api` reads all backend configuration from environment variables:
+
+- `AGENT_API_BASE_URL` — base URL for the backend (defaults to `http://localhost:42002`)
+- `LMS_API_KEY` — backend API key sent as `Authorization: Bearer <key>` (unless `auth: false`)
 
 ### Error Handling
 
@@ -137,3 +155,24 @@ Additional Task&nbsp;2 regression tests run `agent.py` against a local stub LLM
 server to verify the tool-calling loop populates `tool_calls` and produces a
 wiki `source` reference.
 
+## System prompt and tool choice (Task&nbsp;3 notes)
+
+The main failure mode when adding `query_api` is tool confusion: the model may try
+to answer a system question from outdated documentation or by guessing. The system
+prompt therefore explicitly instructs:
+
+- wiki lookup → `list_files`/`read_file` under `wiki/`
+- source-of-truth code facts → `read_file` under `backend/`
+- live behavior & data → `query_api`
+
+This enables multi-step debugging tasks where the agent first queries an endpoint,
+then reads the corresponding router code to explain the exception.
+
+## Benchmark results
+
+The repository includes `run_eval.py` to check 10 local benchmark questions. The
+runner requires autochecker credentials in environment variables (typically via
+`.env` or `.env.docker.secret`). In environments where these are not set, the
+benchmark cannot be executed.
+
+- **Final local score**: _TBD (requires configured `AUTOCHECKER_API_URL`, `AUTOCHECKER_EMAIL`, `AUTOCHECKER_PASSWORD`)_
