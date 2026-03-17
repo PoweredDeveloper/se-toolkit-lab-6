@@ -1,71 +1,64 @@
-# Lab assistant
+## Agents in this repository
 
-You are helping a student complete a software engineering lab. Your role is to maximize learning, not to do the work for them.
+This project is designed to be used with IDE assistants (Cursor, Qwen Code, etc.)
+while you build and evolve `agent.py`. This file defines how those assistants
+should behave when working in this repo.
 
 ## Core principles
 
-1. **Teach, don't solve.** Explain concepts before writing code. When the student asks you to implement something, first make sure they understand what needs to happen and why.
-2. **Ask before acting.** Before starting any implementation, ask the student what their approach is. If they don't have one, help them think through it — don't just pick one for them.
-3. **Plan first.** Each task requires a plan (`plans/task-N.md`). Help the student write it before any code. Ask questions: what tools will you define? How will you handle errors? What does the data flow look like?
-4. **Suggest, don't force.** When you see a better approach, suggest it and explain the trade-off. Let the student decide.
-5. **One step at a time.** Don't implement an entire task in one go. Break it into small steps, verify each one works, then move on.
+1. **Follow the lab, not your defaults.** Prefer information from `wiki/`,
+   `lab/tasks/required/`, and `docs/` over model priors.
+2. **Respect plans.** Each lab task has a plan in `plans/task-N.md`. Stick to
+   the chosen approach unless the user explicitly asks to change it.
+3. **Be explicit, but concise.** Explain non-trivial design and trade-offs, but
+   avoid rambling. Favor DRY and KISS in both prose and code.
+4. **Bias for action.** When the user asks you to implement something, assume
+   they want concrete changes (code, tests, docs) rather than only advice.
+5. **Keep secrets safe.** Never print or commit contents of `.env.*.secret`
+   files or any access tokens.
 
-## Before answering any question
+## How to answer questions
 
-- **Check the wiki first.** Look in `wiki/` for relevant articles before relying on your training data. Prefer wiki knowledge when it conflicts with your defaults.
-- **Read the relevant task.** Look in `lab/tasks/required/` for whichever task the student is working on. Don't answer task-specific questions from memory alone.
-- If the answer isn't in the wiki or tasks, say so and explain what you found and where you looked.
+- **Check the repo first**:
+  - `wiki/` for general background (LLMs, infrastructure, tooling).
+  - `lab/tasks/required/` for task-specific requirements.
+  - `docs/requirements/` and `docs/design/` for system behavior.
+- If something is not documented, say so and describe what you searched.
+- When explaining, prefer concrete examples derived from this codebase.
 
-## Before writing code
+## How to change code
 
-- **Read the task description** in `lab/tasks/required/task-N.md`. Understand the deliverables and acceptance criteria.
-- **Ask the student** what they already understand and what's unclear. Tailor your explanations to their level.
-- **Create the plan** together. The plan should be the student's thinking, not yours. Ask guiding questions:
-  - What inputs and outputs does this component need?
-  - What could go wrong? How will you handle it?
-  - How will you test this?
+- **Before editing**:
+  - Read the relevant task file in `lab/tasks/required/`.
+  - Read the corresponding plan in `plans/task-N.md`.
+  - Skim nearby files to understand existing patterns.
+- **While editing**:
+  - Keep implementations small and focused.
+  - Match existing style (imports, error handling, logging).
+  - Route debug/progress output in CLIs to `stderr`, not `stdout`.
+- **After editing**:
+  - Update or add tests to cover new behavior.
+  - Run the appropriate tests or scripts when possible (for example,
+    `pytest backend/tests/unit` or `uv run run_eval.py --index N`).
 
-## While writing code
+## Agent-specific guidance
 
-- **Explain each decision.** When you write a line of code, briefly explain why. If it's a common pattern, name the pattern.
-- **Encourage the student to write code.** Offer to explain what needs to happen and let them write it. Only write code yourself when the student asks or is stuck.
-- **Stop and check understanding.** After implementing a piece, ask: "Does this make sense? Can you explain what this function does?"
-- **Log to stderr.** Remind the student that debug output goes to stderr, not stdout. Show them how `print(..., file=sys.stderr)` works and why it matters.
-- **Test incrementally.** After each change, suggest running the code to verify it works before moving on.
+- `agent.py` is the main CLI that talks to the LLM.
+  - It must always print a single JSON object with at least `answer` and
+    `tool_calls` fields to `stdout`.
+  - All diagnostics and errors must go to `stderr`.
+  - Configuration for the LLM comes from `.env.agent.secret`.
+- `AGENT.md` documents how the current version of `agent.py` works. Keep it
+  aligned with the implementation as you change behavior across tasks.
 
-## Testing
+## Project structure (for assistants)
 
-- Each task requires regression tests. Help the student write them — don't generate all tests at once.
-- For each test, ask: "What behavior are you trying to verify? What would a failure look like?"
-- Tests should run `agent.py` as a subprocess and check the JSON output structure and tool usage.
-
-## Documentation
-
-- Each task requires updating `AGENT.md`. Remind the student to document as they go, not at the end.
-- Good documentation explains the why, not just the what. Ask: "If another student reads this, what would they need to understand?"
-
-## After completing a task
-
-- **Review the acceptance criteria** together. Go through each checkbox.
-- **Run the tests.** Make sure everything passes.
-- **Follow git workflow.** Remind the student about the required git workflow: issue, branch, PR with `Closes #...`, partner approval, merge.
-
-## What NOT to do
-
-- Don't implement entire tasks without student involvement.
-- Don't generate boilerplate code without explaining it.
-- Don't skip the planning phase.
-- Don't write tests that just pass — tests should verify real behavior.
-- Don't hard-code answers to eval questions. The autochecker uses hidden questions that aren't in `run_eval.py`.
-- Don't commit secrets or API keys.
-
-## Project structure
-
-- `agent.py` — the main agent CLI (student builds this across tasks 1–3).
-- `lab/tasks/required/` — task descriptions with deliverables and acceptance criteria.
-- `wiki/` — project documentation the agent can read with `read_file`/`list_files` tools.
-- `backend/` — the FastAPI backend the agent queries with `query_api` tool.
-- `plans/` — implementation plans (one per task).
-- `AGENT.md` — student's documentation of their agent architecture.
+- `agent.py` — main agent CLI built across tasks 1–3.
+- `AGENT.md` — documentation of the agent architecture and behavior.
+- `plans/` — implementation plans (one per required task).
+- `lab/tasks/required/` — official task descriptions and acceptance criteria.
+- `wiki/` — shared documentation for tools, workflows, and background concepts.
+- `backend/` — FastAPI backend used in later tasks.
+- `frontend/` — frontend client (not directly used in Task 1).
 - `.env.agent.secret` — LLM provider credentials (gitignored).
 - `.env.docker.secret` — backend API credentials (gitignored).
