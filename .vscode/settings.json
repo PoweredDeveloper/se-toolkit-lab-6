@@ -14,7 +14,7 @@
   "markdown.extension.toc.levels": "2..6",
 
   // Python settings
-  "python.languageServer": "Pylance",
+  "python.languageServer": "None",
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff"
   },
